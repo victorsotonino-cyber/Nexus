@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nexus Dashboard</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Arial;background:#0b0d12;color:#f4f5f7}button,input,select{font:inherit}
+.app{display:flex;min-height:100vh}.side{width:245px;background:#11141b;border-right:1px solid #252a34;padding:22px 14px}.brand{font-size:22px;font-weight:800;padding:8px 12px 24px}.brand span{color:#8b5cf6}.nav button{width:100%;text-align:left;background:transparent;color:#aeb5c2;border:0;padding:12px;border-radius:9px;cursor:pointer;margin:2px 0}.nav button.active,.nav button:hover{background:#211c32;color:#fff}.main{flex:1;padding:28px;max-width:1100px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:26px}.muted{color:#8f98a8}.card{background:#12161e;border:1px solid #252b36;border-radius:14px;padding:20px;margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}.stat{padding:18px;border:1px solid #252b36;border-radius:12px;background:#10141b}.stat b{font-size:25px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}label{display:block;color:#b7bfcc;margin:12px 0 6px}input,select{width:100%;background:#0c1016;border:1px solid #303744;color:#fff;padding:11px;border-radius:8px}.btn{background:#7c3aed;color:#fff;border:0;border-radius:8px;padding:11px 15px;cursor:pointer}.btn.secondary{background:#252b36}.guild{cursor:pointer}.hidden{display:none}.login{max-width:500px;margin:100px auto;text-align:center}.logo{font-size:55px;font-weight:900}.pill{font-size:12px;background:#242936;padding:5px 8px;border-radius:20px;color:#bfc6d2}@media(max-width:700px){.side{width:190px}.main{padding:18px}.top{align-items:flex-start;gap:12px;flex-direction:column}}
+</style>
+</head>
+<body>
+<div id="login" class="login hidden"><div class="logo">N<span>×</span></div><h1>Nexus Dashboard</h1><p class="muted">Configura tu bot desde un panel estilo Koya.</p><button class="btn" id="loginBtn">Entrar con Discord</button></div>
+<div id="app" class="app hidden">
+<aside class="side"><div class="brand">Nexus <span>Dashboard</span></div><div class="nav">
+<button data-page="home" class="active">🏠 Inicio</button><button data-page="tickets">🎫 Tickets</button><button data-page="moderation">🛡️ Moderación</button><button data-page="applications">📝 Postulaciones</button><button data-page="vouches">⭐ Vouches</button><button data-page="logs">📋 Logs</button><button data-page="roles">👥 Roles</button>
+</div></aside>
+<main class="main"><div class="top"><div><h1 id="title">Inicio</h1><div class="muted" id="subtitle">Selecciona una configuración.</div></div><button class="btn secondary" id="logout">Salir</button></div>
+<section id="page"></section></main></div>
+<script>
+const $=s=>document.querySelector(s);let state={guild:null,config:null};
+async function api(url,opt){const r=await fetch(url,opt);if(r.status===401){showLogin();throw 0}return r.json()}
+function showLogin(){ $('#login').classList.remove('hidden');$('#app').classList.add('hidden');}
+function showApp(){ $('#login').classList.add('hidden');$('#app').classList.remove('hidden');}
+async function boot(){try{const me=await api('/api/me');if(!me.authenticated)return showLogin();showApp();const g=await api('/api/guilds');renderGuilds(g)}catch(e){}}
+function renderGuilds(guilds){if(!guilds.length){$('#page').innerHTML='<div class="card"><h2>No hay servidores disponibles</h2><p class="muted">Tu cuenta necesita administrar al menos un servidor donde esté Nexus.</p></div>';return}state.guild=guilds[0];loadConfig()}
+async function loadConfig(){state.config=(await api('/api/config/'+state.guild.id)).config;render('home')}
+async function save(patch){state.config={...state.config,...patch};await api('/api/config/'+state.guild.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state.config)});render(location.hash.slice(1)||'home')}
+function render(page){
+const c=state.config||{};const names={home:['Inicio','Panel principal'],tickets:['Tickets','Configuración del sistema de tickets'],moderation:['Moderación','Herramientas y logs'],applications:['Postulaciones','Configura tus formularios'],vouches:['Vouches','Canal y funcionamiento de vouches'],logs:['Logs','Canales de registros'],roles:['Roles','Roles principales del servidor']};
+$('#title').textContent=names[page]?.[0]||'Inicio';$('#subtitle').textContent=names[page]?.[1]||'';
+document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
+if(page==='home')$('#page').innerHTML='<div class="grid"><div class="stat"><span class="muted">Servidor</span><br><b>'+esc(state.guild.name)+'</b></div><div class="stat"><span class="muted">Tickets</span><br><b>'+esc(c.ticketCategory||'No configurado')+'</b></div><div class="stat"><span class="muted">Vouches</span><br><b>'+esc(c.vouchChannel||'No configurado')+'</b></div></div><div class="card"><h2>Configuración rápida</h2><p class="muted">Usa el menú lateral para configurar Nexus.</p></div>';
+else if(page==='tickets')form('🎫 Tickets',[['ticketCategory','Categoría de tickets'],['ticketStaffRole','Rol Staff'],['ticketLimit','Límite por usuario']]);
+else if(page==='moderation')form('🛡️ Moderación',[['modLogChannel','Canal de logs de moderación']]);
+else if(page==='applications')form('📝 Postulaciones',[['staffPostChannel','Canal de post-staff'],['alterPostChannel','Canal de post-alter']]);
+else if(page==='vouches')form('⭐ Vouches',[['vouchChannel','Canal de vouches']]);
+else if(page==='logs')form('📋 Logs',[['modLogChannel','Logs de moderación'],['ticketLogChannel','Logs de tickets']]);
+else if(page==='roles')form('👥 Roles',[['staffRole','Rol Staff'],['helperRole','Rol Helper'],['alterRole','Rol Alter']]);
+}
+function form(title,fields){let html='<div class="card"><h2>'+title+'</h2>';for(const [k,l] of fields)html+='<label>'+l+'</label><input id="f_'+k+'" value="'+esc(state.config[k]||'')+'" placeholder="ID o valor">';html+='<br><button class="btn" id="save">Guardar cambios</button></div>';$('#page').innerHTML=html;$('#save').onclick=()=>{const p={};fields.forEach(([k])=>p[k]=$('#f_'+k).value.trim());save(p)}}
+function esc(v){return String(v??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]))}
+document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{location.hash=b.dataset.page;render(b.dataset.page)});
+$('#loginBtn').onclick=()=>location.href='/auth/discord';$('#logout').onclick=()=>location.href='/auth/logout';
+window.onhashchange=()=>render(location.hash.slice(1)||'home');boot();
+</script></body></html>
