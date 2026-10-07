@@ -12,6 +12,8 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
 const PORT = Number(process.env.PORT || 3000);
 const PREFIX = (process.env.PREFIX || "vouch").toLowerCase();
+const DASHBOARD_URL = "https://nexush-1xmz.onrender.com";
+const DISCORD_REDIRECT_URI = DASHBOARD_URL + "/auth/discord/callback";
 
 const DATA_DIR = path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "vouches.json");
@@ -217,7 +219,7 @@ async function discordOAuthToken(code) {
     client_secret: process.env.DISCORD_CLIENT_SECRET || "",
     grant_type: "authorization_code",
     code,
-    redirect_uri: (process.env.DASHBOARD_URL || "").replace(/\/$/, "") + "/auth/discord/callback"
+    redirect_uri: DISCORD_REDIRECT_URI
   });
   const r = await fetch("https://discord.com/api/oauth2/token", {
     method: "POST",
@@ -245,7 +247,7 @@ const server = http.createServer(async (req, res) => {
       if (!CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET || !process.env.DASHBOARD_URL) {
         return json(res, 500, { error: "Configura CLIENT_ID, DISCORD_CLIENT_SECRET y DASHBOARD_URL." });
       }
-      const redirect = encodeURIComponent(process.env.DASHBOARD_URL.replace(/\/$/, "") + "/auth/discord/callback");
+      const redirect = encodeURIComponent(DISCORD_REDIRECT_URI);
       return res.writeHead(302, {
         Location: "https://discord.com/oauth2/authorize?client_id=" + encodeURIComponent(CLIENT_ID) +
           "&response_type=code&redirect_uri=" + redirect + "&scope=identify%20guilds"
