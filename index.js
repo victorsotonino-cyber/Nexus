@@ -1,22 +1,17 @@
-
 const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
+const crypto = require("node:crypto");
 const {
   Client, GatewayIntentBits, Partials, EmbedBuilder, REST, Routes,
   SlashCommandBuilder, PermissionFlagsBits, ChannelType
 } = require("discord.js");
 
-const TOKEN = process.env.DISCORD_TOKEN;
+const TOKEN = process.env.DISCORD_TOKEN || "";
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
 const PORT = Number(process.env.PORT || 3000);
 const PREFIX = (process.env.PREFIX || "vouch").toLowerCase();
-
-if (!TOKEN) {
-  console.error("Falta DISCORD_TOKEN en las variables de entorno.");
-  process.exit(1);
-}
 
 const DATA_DIR = path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "vouches.json");
@@ -82,7 +77,6 @@ const slashCommands = [
     .setDescription("Registra un vouch para un usuario.")
     .addUserOption(o => o.setName("usuario").setDescription("Usuario que recibe el vouch.").setRequired(true))
     .addStringOption(o => o.setName("servicio").setDescription("Servicio o producto (opcional).").setRequired(false)),
-
   new SlashCommandBuilder()
     .setName("vouchchannel")
     .setDescription("Configura dónde se publican los vouches.")
@@ -91,7 +85,6 @@ const slashCommands = [
       .addChannelOption(o => o.setName("canal").setDescription("Canal de texto.").addChannelTypes(ChannelType.GuildText).setRequired(true)))
     .addSubcommand(s => s.setName("off").setDescription("Desactiva los vouches."))
     .addSubcommand(s => s.setName("ver").setDescription("Muestra el canal configurado.")),
-
   new SlashCommandBuilder()
     .setName("vouchstats")
     .setDescription("Muestra los vouches de un usuario.")
@@ -104,13 +97,12 @@ const client = new Client({
 });
 
 async function registerCommands() {
-  if (!CLIENT_ID) {
-    console.warn("CLIENT_ID no está configurado; no se registrarán comandos slash.");
+  if (!TOKEN || !CLIENT_ID) {
+    console.warn("Bot en modo dashboard: no se registran comandos slash.");
     return;
   }
   const rest = new REST({ version: "10" }).setToken(TOKEN);
   const body = slashCommands.map(c => c.toJSON());
-
   if (GUILD_ID) {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body });
     console.log("Comandos slash registrados en el servidor " + GUILD_ID);
@@ -131,41 +123,30 @@ client.on("interactionCreate", async interaction => {
 
   if (interaction.commandName === "vouch") {
     const outputChannel = await resolveOutputChannel(interaction.guild);
-    if (!outputChannel) {
-      return interaction.reply({ content: "❌ No hay un canal configurado. Usa /vouchchannel set.", ephemeral: true });
-    }
-
+    if (!outputChannel) return interaction.reply({ content: "❌ No hay un canal configurado. Usa /vouchchannel set.", ephemeral: true });
     const target = interaction.options.getUser("usuario", true);
     if (target.bot) return interaction.reply({ content: "❌ No puedes dar un vouch a un bot.", ephemeral: true });
     if (target.id === interaction.user.id) return interaction.reply({ content: "❌ No puedes darte un vouch a ti mismo.", ephemeral: true });
-
     const total = addVouch(interaction.guild.id, target.id);
-    await outputChannel.send({
-      embeds: [buildVouchEmbed("<@" + target.id + ">", "<@" + interaction.user.id + ">", total)]
-    });
+    await outputChannel.send({ embeds: [buildVouchEmbed("<@" + target.id + ">", "<@" + interaction.user.id + ">", total)] });
     return interaction.reply({ content: "✅ Vouch registrado.", ephemeral: true });
   }
 
   if (interaction.commandName === "vouchchannel") {
     const sub = interaction.options.getSubcommand();
     const guildData = getGuildData(interaction.guild.id);
-
     if (sub === "set") {
       const channel = interaction.options.getChannel("canal", true);
       guildData.outputChannelId = channel.id;
       saveData();
       return interaction.reply({ content: "✅ Los vouches se publicarán en <#" + channel.id + ">.", ephemeral: true });
     }
-
     if (sub === "off") {
       guildData.outputChannelId = null;
       saveData();
       return interaction.reply({ content: "✅ Canal de vouches desactivado.", ephemeral: true });
     }
-
-    if (!guildData.outputChannelId) {
-      return interaction.reply({ content: "ℹ️ No hay ningún canal de vouches configurado.", ephemeral: true });
-    }
+    if (!guildData.outputChannelId) return interaction.reply({ content: "ℹ️ No hay ningún canal de vouches configurado.", ephemeral: true });
     return interaction.reply({ content: "📊 Canal actual: <#" + guildData.outputChannelId + ">", ephemeral: true });
   }
 
@@ -182,21 +163,14 @@ client.on("messageCreate", async message => {
   if (!message.guild || message.author.bot) return;
   const content = message.content.trim();
   if (!content.toLowerCase().startsWith(PREFIX + " ")) return;
-
   const outputChannel = await resolveOutputChannel(message.guild);
-  if (!outputChannel) {
-    return message.reply("❌ No hay un canal de vouches configurado. Un administrador debe usar /vouchchannel set.");
-  }
-
+  if (!outputChannel) return message.reply("❌ No hay un canal de vouches configurado. Un administrador debe usar /vouchchannel set.");
   const target = message.mentions.members.first();
   if (!target) return message.reply("❌ Usa: " + PREFIX + " @usuario o " + PREFIX + " servicio @usuario");
   if (target.user.bot) return message.reply("❌ No puedes dar un vouch a un bot.");
   if (target.user.id === message.author.id) return message.reply("❌ No puedes darte un vouch a ti mismo.");
-
   const total = addVouch(message.guild.id, target.user.id);
-  await outputChannel.send({
-    embeds: [buildVouchEmbed("<@" + target.user.id + ">", "<@" + message.author.id + ">", total)]
-  });
+  await outputChannel.send({ embeds: [buildVouchEmbed("<@" + target.user.id + ">", "<@" + message.author.id + ">", total)] });
 });
 
 client.on("error", error => console.error("Discord client error:", error));
@@ -212,21 +186,19 @@ function loadDashboardData() {
   } catch { return { guilds: {} }; }
 }
 let dashboardData = loadDashboardData();
-function saveDashboardData() {
-  fs.writeFileSync(DASHBOARD_DATA, JSON.stringify(dashboardData, null, 2));
-}
+function saveDashboardData() { fs.writeFileSync(DASHBOARD_DATA, JSON.stringify(dashboardData, null, 2)); }
 function getDashboardGuild(guildId) {
   if (!dashboardData.guilds[guildId]) dashboardData.guilds[guildId] = {
-    ticketCategory: "", ticketStaffRole: "", ticketLimit: "2",
-    modLogChannel: "", staffPostChannel: "", alterPostChannel: "",
-    vouchChannel: "", ticketLogChannel: "", staffRole: "", helperRole: "", alterRole: ""
+    ticketCategory: "", ticketStaffRole: "", ticketLimit: "2", modLogChannel: "",
+    staffPostChannel: "", alterPostChannel: "", vouchChannel: "", ticketLogChannel: "",
+    staffRole: "", helperRole: "", alterRole: ""
   };
   return dashboardData.guilds[guildId];
 }
 function cookies(req) {
   const out = {};
   for (const part of (req.headers.cookie || "").split(";")) {
-    const [k,...v] = part.trim().split("=");
+    const [k, ...v] = part.trim().split("=");
     if (k) out[k] = decodeURIComponent(v.join("="));
   }
   return out;
@@ -247,7 +219,11 @@ async function discordOAuthToken(code) {
     code,
     redirect_uri: (process.env.DASHBOARD_URL || "").replace(/\/$/, "") + "/auth/discord/callback"
   });
-  const r = await fetch("https://discord.com/api/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  const r = await fetch("https://discord.com/api/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body
+  });
   if (!r.ok) throw new Error("OAuth token error " + r.status);
   return r.json();
 }
@@ -270,7 +246,10 @@ const server = http.createServer(async (req, res) => {
         return json(res, 500, { error: "Configura CLIENT_ID, DISCORD_CLIENT_SECRET y DASHBOARD_URL." });
       }
       const redirect = encodeURIComponent(process.env.DASHBOARD_URL.replace(/\/$/, "") + "/auth/discord/callback");
-      return res.writeHead(302, { Location: "https://discord.com/oauth2/authorize?client_id=" + encodeURIComponent(CLIENT_ID) + "&response_type=code&redirect_uri=" + redirect + "&scope=identify%20guilds" }).end();
+      return res.writeHead(302, {
+        Location: "https://discord.com/oauth2/authorize?client_id=" + encodeURIComponent(CLIENT_ID) +
+          "&response_type=code&redirect_uri=" + redirect + "&scope=identify%20guilds"
+      }).end();
     }
 
     if (url.pathname === "/auth/discord/callback") {
@@ -278,20 +257,28 @@ const server = http.createServer(async (req, res) => {
       if (!code) return res.writeHead(400).end("Falta el código OAuth2.");
       const token = await discordOAuthToken(code);
       const user = await discordGet("/users/@me", token.access_token);
-      const id = require("node:crypto").randomUUID();
+      const id = crypto.randomUUID();
       dashboardSessions.set(id, { user, accessToken: token.access_token, created: Date.now() });
-      res.writeHead(302, { "Set-Cookie": "nexus_session=" + encodeURIComponent(id) + "; HttpOnly; Path=/; SameSite=Lax", Location: "/" });
-      return res.end();
+      res.writeHead(302, {
+        "Set-Cookie": "nexus_session=" + encodeURIComponent(id) + "; HttpOnly; Path=/; SameSite=Lax",
+        Location: "/"
+      }).end();
+      return;
     }
 
     if (url.pathname === "/auth/logout") {
-      const sid = cookies(req).nexus_session; if (sid) dashboardSessions.delete(sid);
-      res.writeHead(302, { "Set-Cookie": "nexus_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax", Location: "/" }).end();
+      const sid = cookies(req).nexus_session;
+      if (sid) dashboardSessions.delete(sid);
+      res.writeHead(302, {
+        "Set-Cookie": "nexus_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax",
+        Location: "/"
+      }).end();
       return;
     }
 
     if (url.pathname === "/api/me") {
-      const s = session(req); return json(res, 200, s ? { authenticated: true, user: s.user } : { authenticated: false });
+      const s = session(req);
+      return json(res, 200, s ? { authenticated: true, user: s.user } : { authenticated: false });
     }
 
     const s = session(req);
@@ -309,7 +296,8 @@ const server = http.createServer(async (req, res) => {
       const guildId = cfgMatch[1];
       if (req.method === "GET") return json(res, 200, { config: getDashboardGuild(guildId) });
       if (req.method === "POST") {
-        let raw = ""; for await (const chunk of req) raw += chunk;
+        let raw = "";
+        for await (const chunk of req) raw += chunk;
         const incoming = JSON.parse(raw || "{}");
         const allowed = Object.keys(getDashboardGuild(guildId));
         const cfg = getDashboardGuild(guildId);
@@ -321,9 +309,12 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/" || url.pathname === "/index.html") {
       const html = fs.readFileSync(path.join(DASHBOARD_DIR, "public", "index.html"), "utf8");
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); return res.end(html);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(html);
     }
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }); res.end("Nexus Dashboard: 404");
+
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Nexus Dashboard: 404");
   } catch (error) {
     console.error("Dashboard error:", error);
     json(res, 500, { error: "Error interno del dashboard." });
@@ -332,7 +323,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => console.log("Nexus Dashboard online en puerto " + PORT));
 
-client.login(TOKEN).catch(error => {
-  console.error("No se pudo iniciar sesión en Discord:", error);
-  process.exit(1);
-});
+if (TOKEN) {
+  client.login(TOKEN).catch(error => {
+    console.error("No se pudo iniciar sesión en Discord:", error);
+    process.exit(1);
+  });
+} else {
+  console.log("Dashboard iniciado sin DISCORD_TOKEN. El bot permanece apagado en este servicio.");
+}
