@@ -201,12 +201,136 @@ client.on("messageCreate", async message => {
 
 client.on("error", error => console.error("Discord client error:", error));
 
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end("Nexus Vouch Bot online.");
+const dashboardSessions = new Map();
+const DASHBOARD_DIR = path.join(__dirname, "dashboard");
+const DASHBOARD_DATA = path.join(DATA_DIR, "dashboard.json");
+
+function loadDashboardData() {
+  try {
+    if (!fs.existsSync(DASHBOARD_DATA)) fs.writeFileSync(DASHBOARD_DATA, JSON.stringify({ guilds: {} }, null, 2));
+    return JSON.parse(fs.readFileSync(DASHBOARD_DATA, "utf8"));
+  } catch { return { guilds: {} }; }
+}
+let dashboardData = loadDashboardData();
+function saveDashboardData() {
+  fs.writeFileSync(DASHBOARD_DATA, JSON.stringify(dashboardData, null, 2));
+}
+function getDashboardGuild(guildId) {
+  if (!dashboardData.guilds[guildId]) dashboardData.guilds[guildId] = {
+    ticketCategory: "", ticketStaffRole: "", ticketLimit: "2",
+    modLogChannel: "", staffPostChannel: "", alterPostChannel: "",
+    vouchChannel: "", ticketLogChannel: "", staffRole: "", helperRole: "", alterRole: ""
+  };
+  return dashboardData.guilds[guildId];
+}
+function cookies(req) {
+  const out = {};
+  for (const part of (req.headers.cookie || "").split(";")) {
+    const [k,...v] = part.trim().split("=");
+    if (k) out[k] = decodeURIComponent(v.join("="));
+  }
+  return out;
+}
+function json(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(JSON.stringify(body));
+}
+function session(req) {
+  const id = cookies(req).nexus_session;
+  return id ? dashboardSessions.get(id) : null;
+}
+async function discordOAuthToken(code) {
+  const body = new URLSearchParams({
+    client_id: CLIENT_ID,
+    client_secret: process.env.DISCORD_CLIENT_SECRET || "",
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: (process.env.DASHBOARD_URL || "").replace(/\/$/, "") + "/auth/discord/callback"
+  });
+  const r = await fetch("https://discord.com/api/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  if (!r.ok) throw new Error("OAuth token error " + r.status);
+  return r.json();
+}
+async function discordGet(pathname, token) {
+  const r = await fetch("https://discord.com/api" + pathname, { headers: { Authorization: "Bearer " + token } });
+  if (!r.ok) throw new Error("Discord API " + r.status);
+  return r.json();
+}
+function canManageGuild(g) {
+  return Boolean(g.owner || ((Number(g.permissions) & 0x20) === 0x20));
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const base = process.env.DASHBOARD_URL || "http://localhost:" + PORT;
+    const url = new URL(req.url, base);
+
+    if (url.pathname === "/auth/discord") {
+      if (!CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET || !process.env.DASHBOARD_URL) {
+        return json(res, 500, { error: "Configura CLIENT_ID, DISCORD_CLIENT_SECRET y DASHBOARD_URL." });
+      }
+      const redirect = encodeURIComponent(process.env.DASHBOARD_URL.replace(/\/$/, "") + "/auth/discord/callback");
+      return res.writeHead(302, { Location: "https://discord.com/oauth2/authorize?client_id=" + encodeURIComponent(CLIENT_ID) + "&response_type=code&redirect_uri=" + redirect + "&scope=identify%20guilds" }).end();
+    }
+
+    if (url.pathname === "/auth/discord/callback") {
+      const code = url.searchParams.get("code");
+      if (!code) return res.writeHead(400).end("Falta el código OAuth2.");
+      const token = await discordOAuthToken(code);
+      const user = await discordGet("/users/@me", token.access_token);
+      const id = require("node:crypto").randomUUID();
+      dashboardSessions.set(id, { user, accessToken: token.access_token, created: Date.now() });
+      res.writeHead(302, { "Set-Cookie": "nexus_session=" + encodeURIComponent(id) + "; HttpOnly; Path=/; SameSite=Lax", Location: "/" });
+      return res.end();
+    }
+
+    if (url.pathname === "/auth/logout") {
+      const sid = cookies(req).nexus_session; if (sid) dashboardSessions.delete(sid);
+      res.writeHead(302, { "Set-Cookie": "nexus_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax", Location: "/" }).end();
+      return;
+    }
+
+    if (url.pathname === "/api/me") {
+      const s = session(req); return json(res, 200, s ? { authenticated: true, user: s.user } : { authenticated: false });
+    }
+
+    const s = session(req);
+    if (url.pathname === "/api/guilds") {
+      if (!s) return json(res, 401, { error: "No autenticado" });
+      const guilds = (await discordGet("/users/@me/guilds", s.accessToken)).filter(canManageGuild);
+      return json(res, 200, guilds);
+    }
+
+    const cfgMatch = url.pathname.match(/^\/api\/config\/([0-9]+)$/);
+    if (cfgMatch) {
+      if (!s) return json(res, 401, { error: "No autenticado" });
+      const guilds = (await discordGet("/users/@me/guilds", s.accessToken)).filter(canManageGuild);
+      if (!guilds.some(g => g.id === cfgMatch[1])) return json(res, 403, { error: "No administras ese servidor." });
+      const guildId = cfgMatch[1];
+      if (req.method === "GET") return json(res, 200, { config: getDashboardGuild(guildId) });
+      if (req.method === "POST") {
+        let raw = ""; for await (const chunk of req) raw += chunk;
+        const incoming = JSON.parse(raw || "{}");
+        const allowed = Object.keys(getDashboardGuild(guildId));
+        const cfg = getDashboardGuild(guildId);
+        for (const key of allowed) if (typeof incoming[key] === "string") cfg[key] = incoming[key].slice(0, 300);
+        saveDashboardData();
+        return json(res, 200, { ok: true, config: cfg });
+      }
+    }
+
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      const html = fs.readFileSync(path.join(DASHBOARD_DIR, "public", "index.html"), "utf8");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); return res.end(html);
+    }
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }); res.end("Nexus Dashboard: 404");
+  } catch (error) {
+    console.error("Dashboard error:", error);
+    json(res, 500, { error: "Error interno del dashboard." });
+  }
 });
 
-server.listen(PORT, "0.0.0.0", () => console.log("Health server en puerto " + PORT));
+server.listen(PORT, "0.0.0.0", () => console.log("Nexus Dashboard online en puerto " + PORT));
 
 client.login(TOKEN).catch(error => {
   console.error("No se pudo iniciar sesión en Discord:", error);
